@@ -1,0 +1,33 @@
+version: '3.9'
+# use mariadb:10.6 image for the database
+services:
+  db:
+    image: mariadb:10.6
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: chat_engine_v2
+      MYSQL_USER: chat_user
+      MYSQL_PASSWORD: chat_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - mariadbdata:/var/lib/mysql
+    networks:
+      - chat-engine-network
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - chat-engine-network
+
+volumes:
+  mariadbdata:
+  redis-data:
+
+networks:
+  chat-engine-network:
+    driver: bridge
