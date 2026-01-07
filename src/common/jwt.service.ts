@@ -91,13 +91,15 @@ export class JWTService {
     };
   }
 
-  // Generate visitor token with inbox_id
+  // Generate visitor token with inbox_id (session_id is used for website scoping, not stored in token)
   static generateVisitorToken(visitorId: string, tenantId: string, inboxId: string, expiresIn: string = '180d'): string {
     return this.generateAccessToken({
       userId: visitorId,
       email: '', // Not used for visitors
       tenantId,
       inboxId
+      // Note: siteOrigin is NOT stored in token (visible to users)
+      // Website scoping is done via session_id in database
     }, expiresIn);
   }
 }

@@ -398,11 +398,50 @@ const Logger = (() => {
 /* =========================
    STATE
 ========================= */
+// Helper functions for localStorage (works across domains)
+const getStoredVisitorId = () => {
+  try {
+    return localStorage.getItem('chat_engine_visitor_id');
+  } catch (e) {
+    return null;
+  }
+};
+
+const setStoredVisitorId = (id) => {
+  try {
+    if (id) {
+      localStorage.setItem('chat_engine_visitor_id', id);
+    } else {
+      localStorage.removeItem('chat_engine_visitor_id');
+    }
+  } catch (e) {
+    Logger.warn('Failed to store visitorId', e);
+  }
+};
+
+const getStoredVisitorToken = () => {
+  try {
+    return localStorage.getItem('chat_engine_visitor_token');
+  } catch (e) {
+    return null;
+  }
+};
+
+const setStoredVisitorToken = (token) => {
+  try {
+    if (token) {
+      localStorage.setItem('chat_engine_visitor_token', token);
+    } else {
+      localStorage.removeItem('chat_engine_visitor_token');
+    }
+  } catch (e) {
+    Logger.warn('Failed to store visitorToken', e);
+  }
+};
+
 const state = {
   config: {},
-  socket: null,
-  socketReady: false,
-  visitorId: null,
+  visitorId: getStoredVisitorId(),
   conversationId: null
 };
 
@@ -419,7 +458,6 @@ const sendToParent = (type, data = {}) => {
 let widgetInitialized = false;
 
 window.addEventListener('message', (event) => {
-    console.log('Received message from parent:', event.data);
   const msg = event.data;
   if (!msg || msg.source !== 'chat-engine-sdk') return;
   if (widgetInitialized) return; // 🔒 prevents loop
@@ -429,79 +467,51 @@ window.addEventListener('message', (event) => {
 });
 
 /* =========================
-   SOCKET MANAGER
+   SOCKET MANAGER - REMOVED
+   Using REST API only for POSC stage
 ========================= */
-const SocketManager = (() => {
-  let socket;
-  let initialized = false;
-
-  const loadSocketIO = () =>
-    new Promise((res, rej) => {
-      if (window.io) return res();
-      const s = document.createElement('script');
-      s.src = `${state.config.baseUrl}/socket.io/socket.io.js?t=${Date.now()}`;
-      s.onload = res;
-      s.onerror = rej;
-      document.head.appendChild(s);
-    });
-
-  const connect = async () => {
-    if (initialized) return;
-
-    await loadSocketIO();
-    console.log('Socket.IO loaded');
-    socket = io(state.config.baseUrl, {
-      auth: {
-        websiteAPIKey: state.config.websiteAPIKey,
-        sessionId: state.config.sessionId,
-        websiteToken: state.config.websiteToken 
-      },
-      transports: ['websocket'],
-      reconnection: true
-    });
-
-    socket.on('connect', () => {
-      state.socketReady = true;
-      Logger.log('Socket connected');
-    });
-
-    socket.on('disconnect', () => {
-      state.socketReady = false;
-      Logger.warn('Socket disconnected');
-    });
-
-    socket.on('new_message', (msg) => {
-      const isVisitor = msg.sender_type === 'visitor' && msg.sender_id === (state.visitorId ?? document.cookie.split('visitorId=')[1]?.split(';')[0]);
-      addMessage(msg, isVisitor);
-      hideTyping();
-    });
-
-    socket.on('agent_typing', showTyping);
-    socket.on('agent_stopped_typing', hideTyping);
-
-    initialized = true;
-    state.socket = socket;
-  };
-
-  const joinConversation = () => {
-    if (!socket || !state.conversationId) return;
-    socket.emit('join_conversation', {
-      conversationId: state.conversationId,
-      visitorId: state.visitorId
-    });
-  };
-
-  return { connect, joinConversation };
-})();
 
 /* =========================
    INIT
 ========================= */
+const validateApiKey = async (config) => {
+  try {
+    const response = await fetch(`${config.baseUrl}/api/sdk/validate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.websiteAPIKey || ''
+      },
+      body: JSON.stringify({
+        site: config.site
+      })
+    });
+
+    if (!response.ok) return null;
+    const result = await response.json();
+    return result.data; // Extract data from response wrapper
+  } catch (err) {
+    Logger.warn('Validation error', err);
+    return null;
+  }
+};
+
 const initWidget = async (config) => {
   state.config = config;
   if (config.debug) Logger.enable();
 
-  await SocketManager.connect();
+  // Validate API key/site inside widget (keeps SDK light)
+  const validation = await validateApiKey(config);
+  if (!validation) {
+    sendToParent('widget-invalid');
+    return;
+  }
+
+  // Apply branding/widget config returned from validation
+  state.config.branding = validation?.branding || null;
+  state.config.widgetConfig = validation?.widget_config || null;
+
+  // Continue widget boot
   sendToParent('widget-ready');
   getMessages();
 };
@@ -510,21 +520,48 @@ const initWidget = async (config) => {
    CHAT LOGIC
 ========================= */
 const startChat = async() => {
-  state.visitorId = crypto.randomUUID();
-const initialzeVisitor = await fetch(`${state.config.baseUrl}/api/widget/visitor/init`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': state.config.websiteAPIKey
-    },
-    body: JSON.stringify({
-      visitorId: state.visitorId,
-      sessionId: state.config.sessionId
-    })
-  });
-  document.getElementById('welcomeScreen').style.display = 'none';
-  document.getElementById('inputContainer').style.display = 'flex';
-  addMessage('Hello! How can I help you?', false);
+  try {
+    // Initialize visitor if not already done
+    if (!state.visitorId) {
+      const visitorRes = await fetch(`${state.config.baseUrl}/api/sdk/visitors`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': state.config.websiteAPIKey
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          sessionId: state.config.sessionId
+        })
+      });
+      
+      const visitorData = await visitorRes.json();
+      if (visitorData.success && visitorData.data?.visitor?.id) {
+        state.visitorId = visitorData.data.visitor.id;
+        // Store in localStorage (works across domains)
+        setStoredVisitorId(visitorData.data.visitor.id);
+        
+        // Store visitor token if provided
+        if (visitorData.data.visitor_token) {
+          setStoredVisitorToken(visitorData.data.visitor_token);
+        }
+      }
+    } else {
+      // Load from localStorage if available
+      const storedId = getStoredVisitorId();
+      if (storedId && storedId !== state.visitorId) {
+        state.visitorId = storedId;
+      }
+    }
+    
+    // Load existing messages if conversation exists
+    await getMessages();
+    
+    document.getElementById('welcomeScreen').style.display = 'none';
+    document.getElementById('inputContainer').style.display = 'flex';
+  } catch (error) {
+    Logger.error('Error starting chat', error);
+  }
 };
 
 const sendMessage = async () => {
@@ -537,66 +574,135 @@ const sendMessage = async () => {
   input.value = '';
 
   if (!state.conversationId) {
-    const res = await fetch(`${state.config.baseUrl}/api/widget/chat/start`, {
+    // Create new conversation with first message
+    const res = await fetch(`${state.config.baseUrl}/api/sdk/conversations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': state.config.websiteAPIKey
       },
+      credentials: 'include', // Include cookies as fallback
       body: JSON.stringify({
-        // visitorId: state.visitorId,
-        message: content
+        message: content,
+        visitorId: state.visitorId || getStoredVisitorId() // Send from localStorage
       })
     });
 
     const data = await res.json();
-    const botResponseEnabled = data.data.conversation.botResponseEnabled;
-    state.conversationId = data.conversationId;
-    SocketManager.joinConversation();
-    if(botResponseEnabled){
-      addMessage(data.data.conversation.botResponse, false);
+    if (data.success && data.data?.conversation?.id) {
+      state.conversationId = data.data.conversation.id;
+      
+      // Show bot response immediately if available
+      if (data.data.bot_response) {
+        addMessage(data.data.bot_response, false);
+      }
+      
+      // Reload messages to ensure everything is in sync
+      setTimeout(() => getMessages(), 300);
+      hideTyping();
+    } else {
+      Logger.error('Failed to create conversation', data);
+      hideTyping();
     }
-    hideTyping();
   } else {
-    state.socket.emit('send_message', {
-      conversationId: state.conversationId,
-      content
+    // Send message to existing conversation
+    const res = await fetch(`${state.config.baseUrl}/api/sdk/conversations/${state.conversationId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': state.config.websiteAPIKey
+      },
+      credentials: 'include', // Include cookies as fallback
+      body: JSON.stringify({
+        content: content,
+        messageType: 'text',
+        visitorId: state.visitorId || getStoredVisitorId() // Send from localStorage
+      })
     });
+
+    const data = await res.json();
+    if (!data.success) {
+      Logger.error('Failed to send message', data);
+      hideTyping();
+    } else {
+      // Show bot response immediately if available
+      if (data.data?.bot_response) {
+        addMessage(data.data.bot_response, false);
+      }
+      
+      // Reload messages to ensure everything is in sync
+      setTimeout(() => getMessages(), 300);
+      hideTyping();
+    }
   }
 };
 
 
 const getMessages = async () => {
-  console.log('Getting messages for conversation:', state.config.baseUrl);
-
-  const res = await fetch(`${state.config.baseUrl}/api/widget/chat/messages`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': state.config.websiteAPIKey
+  try {
+    // Ensure we have visitorId from localStorage
+    if (!state.visitorId) {
+      const storedId = getStoredVisitorId();
+      if (storedId) {
+        state.visitorId = storedId;
+      } else {
+        // No visitorId, can't load messages
+        return;
+      }
     }
-  });
+    
+    // Get conversationId from state or find it using visitorToken
+    const conversationId = state.conversationId || null;
+    const url = conversationId 
+      ? `${state.config.baseUrl}/api/sdk/conversations/${conversationId}/messages`
+      : `${state.config.baseUrl}/api/sdk/conversations/messages`; // Will find conversation using visitorToken
+    
+    // Build URL with visitorId as query param (since cookies don't work across domains)
+    const urlWithParams = new URL(url);
+    urlWithParams.searchParams.set('visitorId', state.visitorId);
+    
+    const res = await fetch(urlWithParams.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': state.config.websiteAPIKey
+      },
+      credentials: 'include' // Include cookies as fallback
+    });
 
-  const data = await res.json();
+    if (!res.ok) {
+      Logger.warn('Failed to fetch messages', res.status);
+      return;
+    }
 
-  
-  console.log(
-    'Fetched messages:',
-    data.data
-  )
-  // [{
-//     "id": "ac9fb56f-e644-11f0-832f-cad43aa63d2a",
-//     "conversation_id": "ac9edd60-e644-11f0-832f-cad43aa63d2a",
-//     "sender_type": "visitor",
-//     "sender_id": "615fcba6-e634-11f0-832f-cad43aa63d2a",
-//     "content": "hello",
-//     "message_type": "text",
-//     "created_at": "2025-12-31T07:14:16.000Z"
-// }]
-  data?.data?.messages.forEach(msg => {
-    const isVisitor = msg.sender_type === 'visitor' && msg.sender_id === document.cookie.split('visitorId=')[1]?.split(';')[0];
-    addMessage(msg, isVisitor);
-  });
+    const data = await res.json();
+
+    console.log({data})
+    if (data.success && data.data?.messages) {
+      // Store conversationId if we got it
+      if (data.data.conversation_id && !state.conversationId) {
+        state.conversationId = data.data.conversation_id;
+      }
+      
+      // Clear existing messages and reload
+      const messagesContainer = document.querySelector('.messages-container');
+      if (messagesContainer) {
+        // Remove all message divs but keep typing indicator
+        const existingMessages = messagesContainer.querySelectorAll('.message');
+        existingMessages.forEach(msg => msg.remove());
+      }
+      console.log({data})
+      // Add all messages
+      data.data.messages.forEach(msg => {
+        // Check if message is from current visitor (use localStorage, not cookies)
+        const currentVisitorId = state.visitorId || getStoredVisitorId();
+        const isVisitor = msg.sender_type === 'visitor' && msg.sender_id === currentVisitorId;
+        addMessage(msg, isVisitor);
+      });
+    }
+  } catch (error) {
+    Logger.error('Error fetching messages', error);
+  }
 }
 /* =========================
    UI HELPERS
@@ -604,9 +710,23 @@ const getMessages = async () => {
 const addMessage = (msg, isVisitor) => {
   const div = document.createElement('div');
   div.className = `message ${isVisitor ? 'user' : 'agent'}`;
-  div.innerHTML = `<div class="message-bubble">${msg.content || msg}</div>`;
-  document.querySelector('.messages-container')
-    .insertBefore(div, document.getElementById('typingIndicator'));
+  
+  // Handle both message objects and plain strings
+  const content = typeof msg === 'string' ? msg : (msg.content || msg.message || '');
+  const timestamp = msg.created_at ? new Date(msg.created_at).toLocaleTimeString() : '';
+  
+  div.innerHTML = `
+    <div class="message-bubble">${content}</div>
+    ${timestamp ? `<div class="message-time">${timestamp}</div>` : ''}
+  `;
+  
+  const container = document.querySelector('.messages-container');
+  const typingIndicator = document.getElementById('typingIndicator');
+  if (container && typingIndicator) {
+    container.insertBefore(div, typingIndicator);
+    // Auto-scroll to bottom
+    container.scrollTop = container.scrollHeight;
+  }
 };
 
 const showTyping = () =>
@@ -624,17 +744,20 @@ let widgetReadySent = false;
 document.addEventListener('DOMContentLoaded', () => {
   if (widgetReadySent) return;
   widgetReadySent = true;
-
+console.log("Widget DOMContentLoaded");
 window.parent.postMessage({
   source: 'chat-engine-widget',
   type: 'widget-ready'
 }, '*');
 
-// if visitorId in cookie
-if (document.cookie.includes('visitorId')) {
+// Check if visitorId exists in localStorage (works across domains)
+const storedVisitorId = getStoredVisitorId();
+if (storedVisitorId) {
+  state.visitorId = storedVisitorId;
   document.getElementById('welcomeScreen').style.display = 'none';
-
-   document.getElementById('inputContainer').style.display = 'flex';
+  document.getElementById('inputContainer').style.display = 'flex';
+  // Load messages on init if visitor exists
+  setTimeout(() => getMessages(), 100);
 } else {
   document.getElementById('welcomeScreen').style.display = 'flex';
   document.getElementById('inputContainer').style.display = 'none';

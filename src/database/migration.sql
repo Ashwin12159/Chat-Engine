@@ -1,5 +1,16 @@
+-- ============================================================
+-- Chat Engine V2 - Complete Database Migration
+-- ============================================================
+-- This file contains all database migrations for the chat engine:
+-- - Multi-tenancy support
+-- - User authentication
+-- - Conversations and messages
+-- - External visitors and SDK
+-- - Inbox support (conversations scoped by inbox)
+-- - Bot support
+-- ============================================================
 
-use chat_engine_v2;
+USE chat_engine_v2;
 CREATE TABLE tenants (
   id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
   name VARCHAR(255) NOT NULL,

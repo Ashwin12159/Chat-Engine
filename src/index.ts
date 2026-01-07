@@ -2,7 +2,7 @@ import express, { Request, Response} from 'express';
 import cookieParser from 'cookie-parser';
 import http from 'http';
 import path from 'path';
-import externalRouter from './routes/external/index';
+import sdkRouter from './routes/sdk/index';
 import './config/database';
 import logger from './config/logger';
 import { extractTenant, requireTenant } from './middleware/tenant.middleware';
@@ -57,7 +57,8 @@ app.get('/widget', (req: Request, res: Response) => {
 
 app.use(extractTenant);
 
-app.use('/api/widget', externalRouter);
+// RESTful SDK routes
+app.use('/api/sdk', sdkRouter);
 
 app.get('/health', (req: Request, res: Response) => {
   res.send('OK');

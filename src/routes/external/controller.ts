@@ -97,8 +97,8 @@ export const initializeVisitorRoute = async (req: SDKRequest, res: Response) => 
     };
 
     logger.info(`Visitor session initialized: ${visitor.id} for tenant: ${tenantId}, inbox: ${targetInboxId}`);
-    res.cookie("visitorId", visitor.id, { path: "/", maxAge: 60 * 60 * 24 * 60 * 1000, sameSite: "none" , secure: true });
-    res.cookie("visitorToken", visitorToken, { path: "/", maxAge: 60 * 60 * 24 * 60 * 1000, sameSite: "none" , secure: true });
+    res.cookie("visitorId", visitor.id, { path: "/", maxAge: 60 * 60 * 24 * 60 * 1000, sameSite: "lax" });
+    res.cookie("visitorToken", visitorToken, { path: "/", maxAge: 60 * 60 * 24 * 60 * 1000, sameSite: "lax" });
     return sendHTTPResponse.success(res, 201, "Visitor session initialized", responseData);
   } catch (error: any) {
     logger.error({ error }, "Initialize visitor error");
@@ -109,7 +109,6 @@ export const initializeVisitorRoute = async (req: SDKRequest, res: Response) => 
 // Start external chat conversation
 export const startExternalChatRoute = async (req: SDKRequest, res: Response) => {
   try {
-    console.log("startExternalChatRoute", JSON.stringify(req.cookies, null, 2));
     const visitorId = req.body.visitorId || req.cookies.visitorId;
     const chatEngineConversationToken = req.cookies.chatEngineConversation;
     const visitorToken = req.cookies.visitorToken;
@@ -156,7 +155,6 @@ export const startExternalChatRoute = async (req: SDKRequest, res: Response) => 
     }
     let conversationId: string | null = null;
     let shouldCreateNewConversation = true;
-    let botResponse = null;
 
     if (chatEngineConversationToken) {
       const result = await SDKService.getConversationDetailsFromKey(chatEngineConversationToken, visitorId, tenantId);
@@ -186,33 +184,19 @@ export const startExternalChatRoute = async (req: SDKRequest, res: Response) => 
       await ConversationService.addMessage(tenantId, conversationId as string, "visitor", visitorId, message, "text");
       
       // Trigger bot response if bot is enabled and no agent is assigned
-
       if (isBotFeatureEnabled && botDetails) {
         const conversation = await ConversationService.getConversationById(conversationId as string, visitorId, tenantId, "visitor");
         if (conversation && !conversation.assigned_user_id) {
           // Bot should respond - this will be handled by message processing
           // For now, we'll add a simple bot response
-          // for now give some random static response. Should differ each time
-          const randomResponses = [
-            "Thank you for your message. An agent will be with you shortly.",
-            "We're looking into your issue and will get back to you soon.",
-            "Your message is important to us. Please hold on while we connect you with an agent.",
-            "Hello! Thanks for reaching out. An agent will assist you shortly.",
-            "We appreciate your patience. An agent will be with you as soon as possible.",
-            "Hello! We're here to help. Please hold on while we connect you with an agent.",
-            "Thank you for your understanding. We're working to resolve your issue as quickly as possible.",
-            "Hello! We're working on your issue. Please hold on while we connect you with an agent.",
-          ];
-          botResponse = randomResponses[Math.floor(Math.random() * randomResponses.length)];
-          await ConversationService.addMessage(tenantId, conversationId as string, "bot", botDetails.id, botResponse as string, "text");
+          const botResponse = "Thank you for your message. An agent will be with you shortly.";
+          await ConversationService.addMessage(tenantId, conversationId as string, "bot", botDetails.id, botResponse, "text");
         }
       }
     }
     const responseData = {
       conversation: {
         id: conversationId,
-        botResponseEnabled: isBotFeatureEnabled && botDetails ? true : false,
-        botResponse
       },
     };
     if (shouldCreateNewConversation) {
@@ -228,8 +212,7 @@ export const startExternalChatRoute = async (req: SDKRequest, res: Response) => 
       res.cookie("chatEngineConversation", conversationToken, {
         path: "/",
         maxAge: 60 * 60 * 24 * 60 * 1000,
-        sameSite: "none",
-        secure: true 
+        sameSite: "lax",
       });
     }
     logger.info(`External chat started: ${conversationId} for visitor: ${visitorId} in tenant: ${tenantId}, inbox: ${inboxId}`);
@@ -251,7 +234,6 @@ export const getExternalMessagesRoute = async (req: SDKRequest, res: Response) =
 
     if (chatEngineConversationToken) {
       const result = await SDKService.getConversationDetailsFromKey(chatEngineConversationToken, visitorId, tenantId);
-      logger.info({result}, "Conversation details from key");
       if (result.isValid) {
         conversationId = result.data?.conversationId || null;
       }
@@ -259,12 +241,10 @@ export const getExternalMessagesRoute = async (req: SDKRequest, res: Response) =
 
     // const { conversationId } = req.params;
     if (!conversationId || !visitorId) {
-      logger.error({conversationId, visitorId}, "Conversation ID and visitor ID are required");
       return sendHTTPResponse.error(res, 400, "Conversation ID and visitor ID are required");
     }
     // Check if visitor is a participant in the conversation
     const participants = await ConversationService.getParticipants(tenantId, conversationId);
-    console.log({participants})
     const isVisitor = participants.some((p) => p.participant_type === "visitor" && p.participant_id === visitorId);
     if (!isVisitor) {
       return sendHTTPResponse.error(res, 404, "Conversation not found or access denied");

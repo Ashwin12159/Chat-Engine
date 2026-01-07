@@ -9,6 +9,7 @@ import { validateSDKKey } from '../../middleware/sdk.middleware';
 const router = Router();
 
 // Apply SDK key validation to all external routes
+router.post('/sdk/validate');
 router.use(validateSDKKey);
 
 // External communication routes (used by chat SDK)

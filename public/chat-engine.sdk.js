@@ -11,21 +11,35 @@ const SDK_VERSION = '1.0.0';
     debug: false
   };
 
+  // Get or create sessionId from localStorage (persists across refreshes per website)
+  const getOrCreateSessionId = () => {
+    const storageKey = 'chat_engine_session_id';
+    let sessionId = localStorage.getItem(storageKey);
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      localStorage.setItem(storageKey, sessionId);
+    }
+    return sessionId;
+  };
+
   let state = {
     iframe: null,
     button: null,
     open: false,
-    sessionId: crypto.randomUUID()
+    sessionId: getOrCreateSessionId()
   };
 
-  const log = (...a) => config.debug && console.log('[SDK]', ...a);
+  const log = (...a) => config.debug && console.log('[CHAT-ENGINE SDK]', ...a);
 
   const sendToIframe = (type, data = {}) => {
-    state.iframe?.contentWindow?.postMessage({
-      source: 'chat-engine-sdk',
-      type,
-      data: { ...data, sessionId: state.sessionId }
-    }, config.baseUrl);
+    state.iframe?.contentWindow?.postMessage(
+      {
+        source: 'chat-engine-sdk',
+        type,
+        data: { ...data, sessionId: state.sessionId }
+      },
+      config.baseUrl
+    );
   };
 
   window.addEventListener('message', (e) => {
@@ -36,8 +50,14 @@ const SDK_VERSION = '1.0.0';
         websiteAPIKey: config.websiteAPIKey,
         baseUrl: config.baseUrl,
         sessionId: state.sessionId,
-        debug: config.debug
+        debug: config.debug,
+        site: config.site
       });
+    }
+
+    if (e.data.type === 'widget-invalid') {
+      log('Widget reported invalid API key or site - tearing down');
+      teardown();
     }
 
     if (e.data.type === 'widget-close') close();
@@ -87,10 +107,21 @@ const SDK_VERSION = '1.0.0';
   const toggle = () => state.open ? close() : open();
 let initialized = false;
 
-  const init = (userConfig) => {
-    if (!userConfig.websiteAPIKey) return;
+  const init = async (userConfig) => {
+    if (!userConfig || !userConfig.websiteAPIKey || !userConfig.baseUrl) {
+      console.error('[CHAT-ENGINE SDK] websiteAPIKey and baseUrl are required');
+      return;
+    }
 
     config = { ...config, ...userConfig };
+    // Normalize baseUrl (remove trailing slash)
+    config.baseUrl = config.baseUrl.replace(/\/+$/, '');
+    config.site = {
+      origin: window.location.origin,
+      host: window.location.hostname,
+      url: window.location.href,
+      userAgent: navigator.userAgent
+    };
 
     state.button = createButton(userConfig.primaryColor || '#667eea');
     state.iframe = createIframe();
@@ -98,9 +129,19 @@ let initialized = false;
     document.body.appendChild(state.button);
     document.body.appendChild(state.iframe);
 
-  initialized = true;
-  log('SDK initialized');
-};
+    initialized = true;
+    log('SDK initialized (validation deferred to widget)');
+  };
+
+  const teardown = () => {
+    try {
+      state.iframe?.remove();
+      state.button?.remove();
+      initialized = false;
+    } catch (e) {
+      log('teardown error', e);
+    }
+  };
   const isInitialized = () => initialized;
   window.ChatEngineSDK = { init, open, close, isInitialized,
   version: SDK_VERSION};

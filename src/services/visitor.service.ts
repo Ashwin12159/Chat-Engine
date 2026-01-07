@@ -29,6 +29,24 @@ export class VisitorService {
       referrerUrl?: string;
     }
   ): Promise<Visitor> {
+    // Check if visitor already exists for this session_id
+    const checkQuery = `
+      SELECT * FROM external_visitors 
+      WHERE tenant_id = ? AND session_id = ?
+      ORDER BY created_at DESC LIMIT 1
+    `;
+    const checkResult = await runQuery(checkQuery, [tenantId, visitorData.sessionId]);
+    
+    if (checkResult.rows && (checkResult.rows as Visitor[]).length > 0) {
+      // Visitor already exists, update activity and return existing visitor
+      const existingVisitor = (checkResult.rows as Visitor[])[0];
+      if (existingVisitor) {
+        await this.updateVisitorActivity(tenantId, existingVisitor.id);
+        return existingVisitor;
+      }
+    }
+    
+    // Create new visitor
     const query = `
       INSERT INTO external_visitors 
       (id, tenant_id, name, email, phone, session_id, ip_address, user_agent, referrer_url, status)
@@ -44,6 +62,7 @@ export class VisitorService {
       visitorData.userAgent || null,
       visitorData.referrerUrl || null
     ]);
+    
     const selectQuery = `
       SELECT * FROM external_visitors 
       WHERE tenant_id = ? AND session_id = ?

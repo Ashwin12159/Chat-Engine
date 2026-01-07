@@ -21,7 +21,7 @@ export const validateSDKKey = async (req: SDKRequest, res: Response, next: NextF
   try {
     const apiKey = req.headers['x-api-key'] as string;
     const origin = req.headers['origin'] as string;
-
+    console.log({aaaaa:req.headers})
     if (!apiKey) {
       logger.error('API key is required');
       return sendHTTPResponse.error(res, 401, 'API key required');
@@ -47,25 +47,26 @@ export const validateSDKKey = async (req: SDKRequest, res: Response, next: NextF
       logger.error('Tenant is not active');
       return sendHTTPResponse.error(res, 403, 'Tenant is not active');
     }
+    console.log({Aa:sdkSettings.domain,origin})
 
     // Validate domain (CORS check)
-    // if (origin && sdkSettings.domain !== '*') {
-    //   const allowedDomains = sdkSettings.domain.split(',').map((d: string) => d.trim());
-    //   const originDomain = new URL(origin).hostname;
+    if (origin && sdkSettings.domain !== '*') {
+      const allowedDomains = sdkSettings.domain.split(',').map((d: string) => d.trim());
+      const originDomain = new URL(origin).hostname;
       
-    //   const isAllowed = allowedDomains.some((domain: string) => {
-    //     if (domain.startsWith('*.')) {
-    //       // Wildcard subdomain matching
-    //       const baseDomain = domain.substring(2);
-    //       return originDomain.endsWith(baseDomain);
-    //     }
-    //     return domain === originDomain || domain === '*';
-    //   });
+      const isAllowed = allowedDomains.some((domain: string) => {
+        if (domain.startsWith('*.')) {
+          // Wildcard subdomain matching
+          const baseDomain = domain.substring(2);
+          return originDomain.endsWith(baseDomain);
+        }
+        return domain === originDomain || domain === '*';
+      });
 
-    //   if (!isAllowed) {
-    //     return sendHTTPResponse.error(res, 403, 'Domain not allowed');
-    //   }
-    // }
+      if (!isAllowed) {
+        return sendHTTPResponse.error(res, 403, 'Domain not allowed');
+      }
+    }
 
     // Attach SDK settings and tenant context to request
     req.sdkSettings = sdkSettings;
